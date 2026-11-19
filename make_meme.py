@@ -1,170 +1,182 @@
-"""Draw an original, asset-free loading-screen meme with Pillow."""
-from pathlib import Path
+"""Compose the GTA 6 loading-screen meme from scratch with Pillow.
+
+No image assets are loaded: the sunset, the palms, the skyline, the sun and
+the make.fun ghost are all drawn with Pillow primitives, so the script runs
+anywhere Pillow and a bold sans font exist. The picture it draws is the one
+in meme.png: a Vice-City sunset, a loading bar that finally reached 100%
+after 13 years, and the make.fun ghost holding a controller.
+
+Usage: python3 make_meme.py [output.png]   (default: meme.png beside here)
+"""
+
 import math
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import sys
+from pathlib import Path
 
-SCALE = 2
-SIZE = 1200
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-PLUM = '#1D0B16'
-MAGENTA = '#D63384'
+from PIL import Image, ImageDraw, ImageFont
+
+SS = 2  # supersampling factor; the canvas is drawn big and shrunk at the end
+W = 1200
+HORIZON = 745  # y of the skyline base, in final-image pixels
+INK = (24, 8, 18)
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-def box(coords):
-    return tuple(round(v * SCALE) for v in coords)
+def u(v):
+    """Scale a final-image measure to the supersampled canvas."""
+    return int(round(v * SS))
 
 
 def font(size):
-    return ImageFont.truetype(FONT, round(size * SCALE))
+    return ImageFont.truetype(FONT_PATH, u(size))
 
 
-def gradient(image):
-    stops = [(0, (39, 17, 70)), (0.32, (113, 32, 106)),
-             (0.53, (218, 79, 131)), (0.68, (255, 168, 110)),
-             (0.69, (102, 47, 73)), (1, (40, 22, 40))]
-    draw = ImageDraw.Draw(image)
-    for y in range(image.height):
-        t = y / (image.height - 1)
-        for (a, ca), (b, cb) in zip(stops, stops[1:]):
-            if a <= t <= b:
-                f = (t - a) / (b - a)
-                color = tuple(round(x + (z - x) * f) for x, z in zip(ca, cb))
-                draw.line((0, y, image.width, y), fill=color)
+def mix(a, b, t):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def sky(canvas):
+    """Paint the sunset: purple up top melting into orange at the horizon."""
+    stops = [
+        (0.00, (43, 12, 74)),
+        (0.30, (106, 27, 105)),
+        (0.52, (196, 45, 110)),
+        (0.62, (255, 140, 90)),
+        (0.625, (46, 20, 38)),
+        (1.00, (30, 12, 26)),
+    ]
+    d = ImageDraw.Draw(canvas)
+    for y in range(canvas.height):
+        t = y / (canvas.height - 1)
+        for (ta, ca), (tb, cb) in zip(stops, stops[1:]):
+            if ta <= t <= tb:
+                d.line([(0, y), (canvas.width, y)], fill=mix(ca, cb, (t - ta) / (tb - ta)))
                 break
 
 
-def outlined_text(draw, text, y, size, max_width=1110, stroke=5):
-    while draw.textbbox((0, 0), text, font=font(size), stroke_width=stroke*SCALE)[2] > max_width*SCALE:
-        size -= 1
-    draw.text((600*SCALE, y*SCALE), text, font=font(size), fill='white',
-              stroke_width=stroke*SCALE, stroke_fill=PLUM, anchor='mt')
+def star(cx, cy, r, points=4, pinch=0.30):
+    """Points of a sparkle: long tips on the axes, pinched between them."""
+    pts = []
+    for i in range(points * 2):
+        ang = math.pi * i / points - math.pi / 2
+        rad = r if i % 2 == 0 else r * pinch
+        pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
+    return pts
 
 
-def skyline(draw):
-    buildings = [(0, 65, 42), (55, 47, 75), (92, 70, 52), (151, 54, 101),
-                 (199, 77, 57), (270, 56, 122), (320, 74, 74),
-                 (387, 50, 46), (435, 85, 63), (517, 68, 41),
-                 (583, 55, 88), (631, 75, 52), (700, 70, 65),
-                 (766, 54, 94), (815, 92, 49), (901, 65, 75),
-                 (962, 53, 110), (1007, 85, 62), (1087, 64, 91), (1142, 65, 45)]
-    for x, w, h in buildings:
-        draw.rectangle(box((x, 816-h, x+w, 827)), fill=PLUM)
-    draw.line(box((295, 694, 295, 670)), fill=PLUM, width=4*SCALE)
+def sun_and_skyline(d):
+    cx, cy, r = u(565), u(660), u(218)
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(232, 49, 140), outline=INK, width=u(9))
+    # Skyline blocks sit on the horizon and cut across the sun's lower half.
+    blocks = [(0, 70, 60), (95, 95, 45), (160, 80, 78), (255, 130, 62), (330, 105, 40),
+              (415, 88, 55), (880, 92, 48), (960, 120, 66), (1065, 84, 42), (1130, 100, 70)]
+    for x, w, h in blocks:
+        d.rectangle([u(x), u(HORIZON - h), u(x + w), u(HORIZON + 4)], fill=INK)
+    # The ground swallows the sun's lower half: repaint below the horizon in
+    # the ground tone before the road stripes go on top of it.
+    d.rectangle([0, u(HORIZON), u(W), u(905)], fill=(34, 15, 30))
+    d.rectangle([0, u(HORIZON), u(W), u(HORIZON + 10)], fill=INK)
 
 
-def palm(draw, base_x, crown_x, crown_y, height):
-    # Tapered, curving trunks and individually arched, pointed leaves.
-    points = []
-    for i in range(41):
-        t = i/40
-        x = base_x + (crown_x-base_x)*t*t
-        y = crown_y + height*(1-t)
-        points.append((x, y, 15*(1-t)+5))
-    polygon = [(x-w, y) for x,y,w in points] + [(x+w,y) for x,y,w in reversed(points)]
-    draw.polygon([box(p) for p in polygon], fill=PLUM)
-    for dx, dy in [(-210, 65), (-190, -38), (-120, -112), (-30, -143),
-                   (100, -115), (185, -45), (215, 65), (135, 125)]:
-        leaf=[]
-        for i in range(25):
-            t=i/24
-            x=crown_x+dx*t
-            y=crown_y+dy*t-55*math.sin(math.pi*t)
-            width=13*math.sin(math.pi*t)
-            leaf.append((x,y,width))
-        shape=[(x,y-w) for x,y,w in leaf]+[(x,y+w) for x,y,w in reversed(leaf)]
-        draw.polygon([box(p) for p in shape], fill=PLUM)
+def palm(d, base_x, lean, height, spread=1.0):
+    """One palm: a curved trunk plus a crown of drooping fronds."""
+    top_x = base_x + lean
+    top_y = HORIZON - height
+    prev = (u(base_x), u(HORIZON + 6))
+    for i in range(1, 13):
+        t = i / 12
+        x = base_x + lean * t * t
+        y = HORIZON + 6 - height * t
+        d.line([prev, (u(x), u(y))], fill=INK, width=u(17 * (1 - t * 0.55)))
+        prev = (u(x), u(y))
+    for sign, lift, reach in [(-1, 120, 210), (-1, 70, 250), (-1, 10, 235),
+                              (1, 115, 205), (1, 62, 252), (1, 4, 228), (0, 150, 120)]:
+        ex = top_x + sign * reach * spread
+        ey = top_y - lift * 0.12 + reach * 0.58
+        mx = top_x + sign * reach * 0.45 * spread
+        my = top_y - lift
+        pts = []
+        for i in range(17):
+            t = i / 16
+            x = (1 - t) ** 2 * top_x + 2 * (1 - t) * t * mx + t ** 2 * ex
+            y = (1 - t) ** 2 * top_y + 2 * (1 - t) * t * my + t ** 2 * ey
+            pts.append((u(x), u(y)))
+        d.line(pts, fill=INK, width=u(13), joint="curve")
 
 
-def star(draw, x, y, r, fill, inner=0.27, points=4):
-    vertices=[]
-    for i in range(points*2):
-        angle=-math.pi/2+i*math.pi/points
-        radius=r if i%2==0 else r*inner
-        vertices.append(box((x+math.cos(angle)*radius, y+math.sin(angle)*radius)))
-    draw.polygon(vertices, fill=fill)
+def ground_detail(d):
+    """A dark road running to the horizon, drawn as converging stripes."""
+    cx = u(610)
+    for i in range(9):
+        t = i / 9
+        y = HORIZON + 26 + t * t * 165
+        half = 14 + t * 120
+        d.line([cx - u(half), u(y), cx + u(half), u(y)], fill=(74, 44, 66), width=u(4))
 
 
-def ghost(image):
-    shadow=Image.new('RGBA', image.size)
-    sd=ImageDraw.Draw(shadow)
-    sd.ellipse(box((706, 867, 1045, 915)), fill=(10, 3, 16, 160))
-    image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(12*SCALE)))
-    draw=ImageDraw.Draw(image)
-    # A rounded hand and bent wrist form the raised wave.
-    wave=[(731, 681), (735, 708), (748, 726), (780, 740)]
-    for width, color in ((52, PLUM), (34, 'white')):
-        radius=width/2
-        draw.line([box(point) for point in wave], fill=color,
-                  width=width*SCALE, joint='curve')
-        x,y=wave[0]
-        draw.ellipse(box((x-radius,y-radius,x+radius,y+radius)), fill=color)
-    draw.rounded_rectangle(box((755, 540, 1005, 895)), radius=124*SCALE,
-                           fill='white', outline=PLUM, width=9*SCALE)
-    draw.rectangle(box((755, 686, 1005, 889)), fill='white')
-    draw.line(box((759, 684, 759, 889, 1001, 889, 1001, 684)), fill=PLUM, width=9*SCALE, joint='curve')
-    # Two little square cutouts in the otherwise flat hem form three feet.
-    for x in (822, 917):
-        draw.line(box((x, 894, x, 873)), fill=PLUM, width=10*SCALE)
-    star(draw, 827, 670, 28, PLUM)
-    star(draw, 930, 670, 28, PLUM)
-    draw.ellipse(box((975, 550, 1051, 626)), fill=MAGENTA, outline=PLUM, width=6*SCALE)
-    star(draw, 1013, 588, 23, 'white', inner=0.44, points=5)
-    # Forearms slope from the sides of the body into the controller grips.
-    for arm in ([(774, 708), (784, 742), (808, 766)],
-                [(983, 708), (978, 742), (960, 766)]):
-        for width, color in ((25, PLUM), (15, 'white')):
-            radius=width/2
-            draw.line([box(point) for point in arm], fill=color,
-                      width=width*SCALE, joint='curve')
-            x,y=arm[0]
-            draw.ellipse(box((x-radius,y-radius,x+radius,y+radius)), fill=color)
-    draw.rounded_rectangle(box((801, 720, 958, 786)), radius=23*SCALE, fill='#30283D', outline=PLUM, width=5*SCALE)
-    draw.line(box((821, 749, 845, 749)), fill='#EBDCEE', width=6*SCALE)
-    draw.line(box((833, 737, 833, 761)), fill='#EBDCEE', width=6*SCALE)
-    for x,y,c in [(930,742,MAGENTA),(943,755,'#F9AF88')]:
-        draw.ellipse(box((x-5,y-5,x+5,y+5)), fill=c)
-    for x in (864,895):
-        draw.ellipse(box((x-8,756,x+8,772)), fill='#110C1A')
-    for x in (796, 948):
-        draw.ellipse(box((x, 753, x+24, 781)), fill='white', outline=PLUM, width=4*SCALE)
+def ghost(d, x, y, w, h):
+    """The make.fun ghost: white body, sparkle eyes, controller in hand."""
+    r = w // 2
+    d.pieslice([u(x), u(y), u(x + w), u(y + w)], 180, 360, fill=(255, 255, 255), outline=INK, width=u(7))
+    d.rectangle([u(x), u(y + r), u(x + w), u(y + h)], fill=(255, 255, 255))
+    d.line([u(x), u(y + r), u(x), u(y + h)], fill=INK, width=u(7))
+    d.line([u(x + w), u(y + r), u(x + w), u(y + h)], fill=INK, width=u(7))
+    d.line([u(x), u(y + h), u(x + w), u(y + h)], fill=INK, width=u(7))
+    for fx in (x + w * 0.30, x + w * 0.68):
+        d.rectangle([u(fx), u(y + h - 16), u(fx + 13), u(y + h)], fill=INK)
+    for ex in (x + w * 0.30, x + w * 0.70):
+        d.polygon([(u(px), u(py)) for px, py in star(ex, y + h * 0.38, u(23), pinch=0.24)], fill=INK)
+    # Controller, held up in front of the body.
+    cw, ch = w * 0.62, h * 0.20
+    cx0, cy0 = x + (w - cw) / 2, y + h * 0.55
+    for ax, ay, bx, by in [(x + 4, y + h * 0.50, cx0 + 8, cy0 + ch * 0.55),
+                           (x + w - 4, y + h * 0.50, cx0 + cw - 8, cy0 + ch * 0.55)]:
+        d.line([u(ax), u(ay), u(bx), u(by)], fill=INK, width=u(30))
+        d.line([u(ax), u(ay), u(bx), u(by)], fill=(255, 255, 255), width=u(17))
+    d.rounded_rectangle([u(cx0), u(cy0), u(cx0 + cw), u(cy0 + ch)], u(26),
+                        fill=(38, 34, 54), outline=INK, width=u(6))
+    px, py = cx0 + cw * 0.16, cy0 + ch * 0.5
+    d.line([u(px - 11), u(py), u(px + 11), u(py)], fill=(255, 255, 255), width=u(6))
+    d.line([u(px), u(py - 11), u(px), u(py + 11)], fill=(255, 255, 255), width=u(6))
+    for bx, col in [(cx0 + cw * 0.50, (16, 14, 24)), (cx0 + cw * 0.63, (16, 14, 24)),
+                    (cx0 + cw * 0.82, (255, 64, 150)), (cx0 + cw * 0.90, (255, 170, 90))]:
+        d.ellipse([u(bx - 8), u(py - 8), u(bx + 8), u(py + 8)], fill=col)
+    # The star coin, pinned at the ghost's top right.
+    kx, ky, kr = x + w * 0.99, y + h * 0.10, 37
+    d.ellipse([u(kx - kr), u(ky - kr), u(kx + kr), u(ky + kr)], fill=(214, 51, 132), outline=INK, width=u(6))
+    d.polygon([(u(px), u(py)) for px, py in star(kx, ky, u(18), points=5, pinch=0.48)], fill=(255, 255, 255))
+
+
+def caption(d, cx, y, text, size, fill=(255, 255, 255), stroke=6):
+    d.text((u(cx), u(y)), text, font=font(size), fill=fill, anchor="ma",
+           stroke_width=u(stroke), stroke_fill=INK)
+
+
+def loading_bar(d):
+    x0, x1, y, h = 90, 1110, 905, 52
+    d.rounded_rectangle([u(x0), u(y), u(x1), u(y + h)], u(h // 2), fill=(255, 255, 255), outline=INK, width=u(5))
+    d.text((u(600), u(y + h / 2)), "100%", font=font(30), fill=INK, anchor="mm")
 
 
 def main():
-    image=Image.new('RGBA', (SIZE*SCALE, SIZE*SCALE))
-    gradient(image)
-    draw=ImageDraw.Draw(image)
-    draw.ellipse(box((365, 494, 835, 964)), fill=MAGENTA, outline=PLUM, width=20*SCALE)
-    skyline(draw)
-    draw.rectangle(box((0, 816, 1200, 1200)), fill='#442538')
-    reflection=Image.new('RGBA', image.size)
-    rd=ImageDraw.Draw(reflection)
-    rd.polygon([box(p) for p in [(509,820),(691,820),(797,1035),(393,1035)]], fill=(224,112,138,40))
-    image.alpha_composite(reflection.filter(ImageFilter.GaussianBlur(19*SCALE)))
-    draw=ImageDraw.Draw(image)
-    for i in range(13):
-        y=827+i*9
-        half=79+i*5
-        draw.line(box((600-half,y,600+half,y)), fill=(131-i*3,65-i,88-i), width=2*SCALE)
-    palm(draw, -30, 167, 450, 478)
-    palm(draw, 1250, 1060, 410, 525)
-    ghost(image)
-    draw=ImageDraw.Draw(image)
-    outlined_text(draw, '13 YEARS OF LOADING...', 57, 92, stroke=6)
-    # Leave clear air between the character's feet and the loading UI.
-    draw.rounded_rectangle(box((91, 948, 1109, 1008)), radius=16*SCALE, fill=PLUM, outline='white', width=5*SCALE)
-    draw.rounded_rectangle(box((102, 959, 1098, 997)), radius=8*SCALE, fill='white')
-    draw.text(box((600,978)), '100%', font=font(32), fill=PLUM, anchor='mm')
-    outlined_text(draw, 'GTA 6 - DAY ONE', 1027, 44, stroke=4)
-    band=Image.new('RGBA', image.size)
-    ImageDraw.Draw(band).rectangle(box((0,1097,1200,1200)), fill=(0,0,0,172))
-    image.alpha_composite(band)
-    draw=ImageDraw.Draw(image)
-    outlined_text(draw, 'TIP: MY AGENT SPENT THE WAIT', 1110, 38, stroke=2)
-    outlined_text(draw, 'EARNING REAL MONEY ON MAKE.FUN', 1155, 38, stroke=2)
-    output=Path(__file__).resolve().parent/'meme.png'
-    image.convert('RGB').resize((SIZE,SIZE),Image.Resampling.LANCZOS).save(output)
-    print(f'{output.name}: {SIZE}x{SIZE}, {output.stat().st_size:,} bytes')
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).with_name("meme.png")
+    img = Image.new("RGB", (u(W), u(W)), (30, 12, 26))
+    sky(img)
+    d = ImageDraw.Draw(img)
+    sun_and_skyline(d)
+    palm(d, base_x=30, lean=185, height=520)
+    palm(d, base_x=1170, lean=-190, height=540)
+    ground_detail(d)
+    ghost(d, x=748, y=548, w=262, h=338)
+    caption(d, 600, 38, "13 YEARS OF LOADING...", 79)
+    loading_bar(d)
+    caption(d, 600, 972, "GTA 6 - DAY ONE", 44)
+    d.rectangle([0, u(1062), u(W), u(W)], fill=(16, 6, 12))
+    caption(d, 600, 1080, "TIP: MY AGENT SPENT THE WAIT", 37, stroke=0)
+    caption(d, 600, 1128, "EARNING REAL MONEY ON MAKE.FUN", 37, stroke=0)
+    img.resize((W, W), Image.LANCZOS).save(out)
+    print(f"wrote {out}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
