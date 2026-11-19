@@ -10,14 +10,22 @@
 // Outside the grader's container, MAKEFUN_BOT_DIR and MAKEFUN_OUTPUT_DIR stand in for /bot and /output:
 //   mkdir -p out && MAKEFUN_BOT_DIR=. MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readPostAddress } from './post_url.ts';
 
 const BOT_DIR = process.env.MAKEFUN_BOT_DIR ?? '/bot';
 const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 try {
+  // Refuse early, with the reason, when POST.json does not name one post on
+  // X: the gate would refuse the entry anyway, and a named cause is cheaper
+  // to fix here than after a submission. The file itself is copied through
+  // unchanged, byte for byte, so the graded output is the handed-in address
+  // exactly as written.
+  const post = readPostAddress(readFileSync(join(BOT_DIR, 'POST.json'), 'utf8'));
+  void post;
   copyFileSync(join(BOT_DIR, 'POST.json'), join(OUTPUT_DIR, 'POST.json'));
 } catch (err) {
   console.error(`POST.json could not be copied from ${BOT_DIR}: ${(err as Error).message}`);
